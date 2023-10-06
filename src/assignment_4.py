@@ -13,6 +13,10 @@ import transformers
 from transformers.pipelines import TextClassificationPipeline
 from transformers import AutoTokenizer
 from transformers import AutoModelForSequenceClassification
+
+
+from datasets import load_dataset, load_metric
+
 from captum.attr import LayerIntegratedGradients, TokenReferenceBase
 from captum.attr import visualization as viz
 
@@ -21,6 +25,14 @@ import matplotlib.pyplot as plt
 import argparse 
 import jsonlines
 import os 
+
+from captum.concept import TCAV
+from captum.concept import Concept
+from captum.concept._utils.common import concepts_to_str
+
+from torchtext.vocab import Vocab
+
+from captum.concept._utils.data_iterator import dataset_to_dataloader, CustomIterableDataset
 
 class ExplainableTransformerPipeline():
     """Wrapper for Captum framework usage with Huggingface Pipeline"""
@@ -90,6 +102,8 @@ class ExplainableTransformerPipeline():
 def main(args):
     tokenizer = AutoTokenizer.from_pretrained(args.model_checkpoint) 
     model = AutoModelForSequenceClassification.from_pretrained(args.model_checkpoint, num_labels=args.num_labels)
+    dataset = load_dataset('imdb')
+    
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     clf = transformers.pipeline("text-classification", 
@@ -98,6 +112,8 @@ def main(args):
                                 device=device
                                 )
     exp_model = ExplainableTransformerPipeline(args.model_checkpoint, clf, device)
+
+    
 
     idx=0
     with jsonlines.open(args.a1_analysis_file, 'r') as reader:

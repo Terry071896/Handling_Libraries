@@ -4,20 +4,20 @@
 # # Testing with Concept Activation Vectors (TCAV) on Sensitivity Classification Examples and a ConvNet model trained on IMDB DataSet
 
 # This tutorial shows how to apply TCAV, a concept-based model interpretability algorithm, on sentiment classification task using a ConvNet model (https://captum.ai/tutorials/IMDB_TorchText_Interpret) that was trained using IMDB sensitivity dataset.
-# 
+#
 # More details about the approach can be found here: https://arxiv.org/pdf/1711.11279.pdf
-# 
+#
 # In order to use TCAV, we need to predefine a list of concepts that we want our predictions to be test against.
-# 
+#
 # Concepts are human-understandable, high-level abstractions such as visually represented "stripes" in case of images or "positive adjective concept" such as "amazing, great, etc" in case of text. Concepts are formatted and represented as input tensors and do not need to be part of the training or test datasets.
-# 
+#
 # Concepts are incorporated into the importance score computations using Concept Activation Vectors (CAVs). Traditionally, CAVs train linear classifiers and learn decision boundaries between different concepts using the activations of predefined concepts in a NN layer as inputs to the classifier that we train. The vector that is orthogonal to learnt decision boundary and is pointing towards the direction of a concept is the CAV of that concept.
-# 
+#
 # TCAV measures the importance of a concept for a prediction based on the directional sensitivity (derivatives) of a concept in Neural Network (NN) layers. For a given concept and layer it is obtained by aggregating the dot product between CAV for given concept in given layer and the gradients of model predictions w.r.t. given layer output. The aggregation can be performed based on either signs or magnitudes of the directional sensitivities of concepts across multiple examples belonging to a certain class. More details about the technique can be found in above mentioned papers.
-# 
+#
 # Note: Before running this tutorial, please install the spacy, numpy, scipy, sklearn, PIL, and matplotlib packages.
-# 
-# 
+#
+#
 
 # In[1]:
 
@@ -58,10 +58,10 @@ np.random.seed(123)
 # In[2]:
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 
 
-# Defining torchtext data `Field` so that we can load the vocabulary for IMDB dataset the way that was done to train IMDB model. 
+# Defining torchtext data `Field` so that we can load the vocabulary for IMDB dataset the way that was done to train IMDB model.
 
 # In[3]:
 
@@ -120,7 +120,7 @@ def get_tensor_from_filename(filename):
         concept.text += ['pad'] * max(0, const_len - len(concept.text))
         text_indices = torch.tensor([TEXT.vocab.stoi[t] for t in concept.text], device=device)
         yield text_indices
-        
+
 
 
 # The function below allows us to create a concept instance using a file path where the concepts are stored, concept name and id.
@@ -135,11 +135,11 @@ def assemble_concept(name, id, concepts_path="data/tcav/text-sensitivity"):
 
 
 # Let's define and visualize the concepts that we'd like to explore in this tutorial.
-# 
+#
 # For this tutorial we look into two concepts, `Positive Adjectives` and `Neutral`. `Positive Adjectives` concept defines a group of adjectives that convey positive emotions such as `good` or `lovely`. The `Neutral` concept spans broader domains / subjects and is distinct from the `Positive Adjectives` concept.
-# 
+#
 # The concept definition and the examples describing that concepts are left up to the user.
-# 
+#
 # Below we visualize examples from both `Positive Adjectives` and `Neutral` concepts. This concepts are curated for demonstration purposes. It's up to a user what to include into a concept and what not.
 
 # In[9]:
@@ -159,8 +159,8 @@ positive_concept = assemble_concept('positive-adjectives', 5,                   
 
 
 # Both `Positive Adjective` and `Neutral` concepts have the same number of examples representing corresponding concept. The examples for the `Positive Adjective` concept are semi-hand curated and the context is neutralized whereas those for neutral concept are chosen randomly from Gutenberg Poem Dataset (https://github.com/google-research-datasets/poem-sentiment/blob/master/data/train.tsv)
-# 
-# You can consider also using Stanford Sentiment Tree Bank (SST, https://nlp.stanford.edu/sentiment/index.html) dataset with `neutral` labels. 
+#
+# You can consider also using Stanford Sentiment Tree Bank (SST, https://nlp.stanford.edu/sentiment/index.html) dataset with `neutral` labels.
 
 # # Examples representing `Neutral` Concept
 
@@ -188,52 +188,52 @@ print_concept_sample(iter(positive_concept.data_iter))
 
 
 class CNN(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, n_filters, filter_sizes, output_dim, 
+    def __init__(self, vocab_size, embedding_dim, n_filters, filter_sizes, output_dim,
                  dropout, pad_idx):
-        
+
         super().__init__()
-                
+
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx = pad_idx)
-        
+
         self.convs = nn.ModuleList([
-                                    nn.Conv2d(in_channels = 1, 
-                                              out_channels = n_filters, 
-                                              kernel_size = (fs, embedding_dim)) 
+                                    nn.Conv2d(in_channels = 1,
+                                              out_channels = n_filters,
+                                              kernel_size = (fs, embedding_dim))
                                     for fs in filter_sizes
                                     ])
-        
+
         self.fc = nn.Linear(len(filter_sizes) * n_filters, output_dim)
 
         self.dropout = nn.Dropout(dropout)
-        
+
     def forward(self, text):
-        
+
         #text = [sent len, batch size]
-        
+
         #text = text.permute(1, 0)
-                
+
         #text = [batch size, sent len]
-        
+
         embedded = self.embedding(text)
 
         #embedded = [batch size, sent len, emb dim]
-        
+
         embedded = embedded.unsqueeze(1)
-        
+
         #embedded = [batch size, 1, sent len, emb dim]
-        
+
         conved = [F.relu(conv(embedded)).squeeze(3) for conv in self.convs]
-            
+
         #conved_n = [batch size, n_filters, sent len - filter_sizes[n] + 1]
-                
+
         pooled = [F.max_pool1d(conv, conv.shape[2]).squeeze(2) for conv in conved]
-        
+
         #pooled_n = [batch size, n_filters]
-        
+
         cat = self.dropout(torch.cat(pooled, dim = 1))
 
         #cat = [batch size, n_filters * len(filter_sizes)]
-            
+
         return self.fc(cat)
 
 
@@ -247,7 +247,7 @@ model.eval()
 # # Computing TCAV Scores
 
 # Before computing TCAV scores let's created instances of `positive-adjectives` and `neutral` concepts.
-# 
+#
 # In order to estimate significant importance of a concept using two-sided hypothesis testing, we define a number of `neutral` concepts. All `neutral` concepts are defined using random samples from Gutenberg Poem Training Dataset (https://github.com/google-research-datasets/poem-sentiment/blob/master/data/train.tsv).
 
 # In[14]:
@@ -324,7 +324,7 @@ def plot_tcav_scores(experimental_sets, tcav_scores, layers = ['convs.2'], score
     for idx_es, concepts in enumerate(experimental_sets):
         concepts = experimental_sets[idx_es]
         concepts_key = concepts_to_str(concepts)
-        
+
         layers = tcav_scores[concepts_key].keys()
         pos = [np.arange(len(layers))]
         for i in range(1, len(concepts)):
@@ -376,16 +376,16 @@ plot_tcav_scores(experimental_sets, negative_interpretations, ['convs.1', 'convs
 # # Statistical significance testing of concepts
 
 # In order to convince ourselves that our concepts truly explain our predictions, we conduct statistical significance tests on TCAV scores by constructing a number of experimental sets. In this case we look into the `Positive Adjective` concept and a number of `Neutral` concepts. If `Positive Adjective` concept is truly important in predicting positive sentiment in the sentence, then we will see consistent high TCAV scores for `Positive Adjective` concept across all experimental sets as apposed to any other concept.
-# 
+#
 # Each experimental set contains a random concept consisting of a number of random subsamples. In our case this allows us to estimate the robustness of TCAV scores by the means of numerous random concepts.
-# 
-# 
+#
+#
 
 # In addition, it is interesting to look into the p-values of statistical significance tests for each concept. We say, that we reject null hypothesis, if the p-value for concept's TCAV scores is smaller than 0.05. This indicates that the concept is important for model prediction.
-# 
+#
 # We label concept populations as overlapping if p-value > 0.05 otherwise disjoint.
-# 
-# 
+#
+#
 
 # In[23]:
 
@@ -402,7 +402,7 @@ def get_pval(interpretations, layer, score_type, alpha=0.05, print_ret=False):
         print('P2[mean, std]: ', format_float(np.mean(P2)), format_float(np.std(P2)))
         print("p-values:", format_float(pval))
         print(relation)
-        
+
     return P1, P2, format_float(pval), relation
 
 
@@ -433,7 +433,7 @@ def show_boxplots(layer, scores, metric='sign_count'):
 
 
 # The box plots below visualize the distribution of TCAV scores for a pair of concepts in two different layers, `convs.2` and `convs.1`. Each layer is visualized in a separate jupyter cell. Below diagrams show that `Positive Adjectives` concept has TCAV scores that are consistently high across all layers and experimental sets as apposed to `Neutral` concept. It also shows that `Positive Adjectives` and `Neutral` are disjoint populations.
-# 
+#
 
 # In[25]:
 
@@ -445,4 +445,3 @@ show_boxplots("convs.2", positive_interpretations, metric='sign_count')
 
 
 show_boxplots("convs.1", positive_interpretations, metric='sign_count')
-
