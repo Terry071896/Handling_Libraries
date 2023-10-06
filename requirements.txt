@@ -10,3 +10,5 @@ pillow
 jsonlines
 captum
 spacy
+torchtext
+seaborn

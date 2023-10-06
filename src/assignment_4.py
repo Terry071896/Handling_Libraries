@@ -7,6 +7,7 @@ https://gist.githubusercontent.com/theDestI/fe9ea0d89386cf00a12e60dd346f2109/raw
 
 import torch
 import pandas as pd
+import numpy as np
 
 from torch import tensor 
 import transformers
@@ -34,6 +35,11 @@ from torchtext.vocab import Vocab
 
 from captum.concept._utils.data_iterator import dataset_to_dataloader, CustomIterableDataset
 
+if torch.__version__ >= '1.7.0':
+    norm_fn = torch.linalg.norm
+else:
+    norm_fn = torch.norm
+
 class ExplainableTransformerPipeline():
     """Wrapper for Captum framework usage with Huggingface Pipeline"""
     
@@ -50,23 +56,31 @@ class ExplainableTransformerPipeline():
                        attention_mask=torch.ones_like(inputs))
         return pred[position]
         
-    def visualize(self, inputs: list, attributes: list, outfile_path: str):
+    def visualize(self, scores_mat, outfile_path: str, x_label_name='Head'):
         """
             Visualization method.
             Takes list of inputs and correspondent attributs for them to visualize in a barplot
         """
-        #import pdb; pdb.set_trace()
-        attr_sum = attributes.sum(-1) 
         
-        attr = attr_sum / torch.norm(attr_sum)
-        
-        a = pd.Series(attr.cpu().numpy()[0][::-1], 
-                         index = self.__pipeline.tokenizer.convert_ids_to_tokens(inputs.cpu().detach().numpy()[0])[::-1])
-        
-        print(a)
-        #plt.figure(figsize=(10,100))
-        #plt.barh(self.__pipeline.tokenizer.convert_ids_to_tokens(inputs.cpu().detach().numpy()[0])[::-1], attr.cpu().numpy()[0][::-1])
-        a.plot.barh(figsize=(10,100))
+        fig = plt.figure(figsize=(100, 100))
+
+        for idx, scores in enumerate(scores_mat):
+            scores_np = np.array(scores)
+            ax = fig.add_subplot(4, 3, idx+1)
+            # append the attention weights
+            im = ax.imshow(scores, cmap='viridis')
+
+            fontdict = {'fontsize': 10}
+
+            ax.set_xticks(range(len(self.all_tokens)))
+            ax.set_yticks(range(len(self.all_tokens)))
+
+            ax.set_xticklabels(self.all_tokens, fontdict=fontdict, rotation=90)
+            ax.set_yticklabels(self.all_tokens, fontdict=fontdict)
+            ax.set_xlabel('{} {}'.format(x_label_name, idx+1))
+
+            fig.colorbar(im, fraction=0.046, pad=0.04)
+        plt.tight_layout()
         plt.savefig(outfile_path)
                       
     def explain(self, text: str, outfile_path: str):
@@ -74,18 +88,26 @@ class ExplainableTransformerPipeline():
             Main entry method. Passes text through series of transformations and through the model. 
             Calls visualization method.
         """
-        prediction = self.__pipeline.predict(text)
-        inputs = self.generate_inputs(text)
-        baseline = self.generate_baseline(sequence_len = inputs.shape[1])
+        #prediction = self.__pipeline.predict(text)
+        inputs = self.generate_inputs(text=text)
+        outputs = self.__pipeline.model(inputs, attention_mask=torch.ones_like(inputs), output_attentions=True)
+        output_attentions = outputs.attentions
+        output_attentions_all = torch.stack(output_attentions)  
+        indices = inputs[0].detach().tolist()
+        self.all_tokens = self.__pipeline.tokenizer.convert_ids_to_tokens(indices)
         
-        lig = LayerIntegratedGradients(self.forward_func, getattr(self.__pipeline.model, 'deberta').embeddings)
+        self.visualize(norm_fn(output_attentions_all, dim=2).squeeze().detach().cpu().numpy(), outfile_path=outfile_path)
+        # inputs = self.generate_inputs(text)
+        # baseline = self.generate_baseline(sequence_len = inputs.shape[1])
         
-        attributes, delta = lig.attribute(inputs=inputs,
-                                  baselines=baseline,
-                                  target = self.__pipeline.model.config.label2id[prediction[0]['label']], 
-                                  return_convergence_delta = True)
+        # lig = LayerIntegratedGradients(self.forward_func, getattr(self.__pipeline.model, 'deberta').embeddings)
+        
+        # attributes, delta = lig.attribute(inputs=inputs,
+        #                           baselines=baseline,
+        #                           target = self.__pipeline.model.config.label2id[prediction[0]['label']], 
+        #                           return_convergence_delta = True)
         # Give a path to save
-        self.visualize(inputs, attributes, outfile_path)
+        #self.visualize(inputs, attributes, outfile_path)
     
     def generate_inputs(self, text: str) -> tensor:
         """
